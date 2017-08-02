@@ -1593,6 +1593,85 @@ Returns MD5 from entry."
                 'error:changed-orgsexp 'cal->org))
         org-caldav-sync-result))))
 
+;;; Copied from org git 39682d4854a6cb6668bec86479f36d1d39f71f09
+(unless (functionp #'org--deadline-or-schedule)
+  (defun org--deadline-or-schedule (arg type time)
+    "Insert DEADLINE or SCHEDULE information in current entry.
+TYPE is either `deadline' or `scheduled'.  See `org-deadline' or
+`org-schedule' for information about ARG and TIME arguments."
+    (let* ((deadline? (eq type 'deadline))
+           (keyword (if deadline? org-deadline-string org-scheduled-string))
+           (log (if deadline? org-log-redeadline org-log-reschedule))
+           (old-date (org-entry-get nil (if deadline? "DEADLINE" "SCHEDULED")))
+           (old-date-time (and old-date (org-time-string-to-time old-date)))
+           ;; Save repeater cookie from either TIME or current scheduled
+           ;; time stamp.  We are going to insert it back at the end of
+           ;; the process.
+           (repeater (or (and (org-string-nw-p time)
+                              ;; We use `org-repeat-re' because we need
+                              ;; to tell the difference between a real
+                              ;; repeater and a time delta, e.g. "+2d".
+                              (string-match org-repeat-re time)
+                              (match-string 1 time))
+                         (and (org-string-nw-p old-date)
+                              (string-match "\\([.+-]+[0-9]+[hdwmy]\
+\\(?:[/ ][-+]?[0-9]+[hdwmy]\\)?\\)"
+                                            old-date)
+                              (match-string 1 old-date)))))
+      (pcase arg
+        (`(4)
+         (when (and old-date log)
+           (org-add-log-setup (if deadline? 'deldeadline 'delschedule)
+                              nil old-date log))
+         (org-remove-timestamp-with-keyword keyword)
+         (message (if deadline? "Item no longer has a deadline."
+                    "Item is no longer scheduled.")))
+        (`(16)
+         (save-excursion
+           (org-back-to-heading t)
+           (let ((regexp (if deadline? org-deadline-time-regexp
+                           org-scheduled-time-regexp)))
+             (if (not (re-search-forward regexp (line-end-position 2) t))
+                 (user-error (if deadline? "No deadline information to update"
+                               "No scheduled information to update"))
+               (let* ((rpl0 (match-string 1))
+                      (rpl (replace-regexp-in-string " -[0-9]+[hdwmy]" "" rpl0))
+                      (msg (if deadline? "Warn starting from" "Delay until")))
+                 (replace-match
+                  (concat keyword
+                          " <" rpl
+                          (format " -%dd"
+                                  (abs (- (time-to-days
+                                           (save-match-data
+                                             (org-read-date
+                                              nil t nil msg old-date-time)))
+                                          (time-to-days old-date-time))))
+                          ">") t t))))))
+        (_
+         (org-add-planning-info type time 'closed)
+         (when (and old-date
+                    log
+                    (not (equal old-date org-last-inserted-timestamp)))
+           (org-add-log-setup (if deadline? 'redeadline 'reschedule)
+                              org-last-inserted-timestamp
+                              old-date
+                              log))
+         (when repeater
+           (save-excursion
+             (org-back-to-heading t)
+             (when (re-search-forward
+                    (concat keyword " " org-last-inserted-timestamp)
+                    (line-end-position 2)
+                    t)
+               (goto-char (1- (match-end 0)))
+               (insert " " repeater)
+               (setq org-last-inserted-timestamp
+                     (concat (substring org-last-inserted-timestamp 0 -1)
+                             " " repeater
+                             (substring org-last-inserted-timestamp -1))))))
+         (message (if deadline? "Deadline on %s" "Scheduled to %s")
+                  org-last-inserted-timestamp))))))
+
 (defun org-caldav-update-org-todo ()
   "Updates the todo entry.
 Todo syncing is currently not configurable.  Create an issue on
